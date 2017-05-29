@@ -1,0 +1,190 @@
+- hosts: all
+  name: DKAN setup
+  tasks:
+    #
+    # Prerequisites
+    #
+    - name: install epel-release
+      become: yes
+      yum:
+        name: epel-release
+    - name: install remi
+      become: yes
+      command: rpm -Uvh http://rpms.famillecollet.com/enterprise/remi-release-7.rpm
+      args:
+        creates: /etc/yum.repos.d/remi.repo
+    - name: install wget
+      become: yes
+      yum:
+        name: wget
+    - name: install git
+      become: yes
+      yum:
+        name: git
+        enablerepo: epel
+    - name: install MySQL-python
+      become: yes
+      yum:
+        name: MySQL-python
+
+    #
+    # HTTPD
+    #
+    - name: install httpd
+      become: yes
+      yum:
+        name: httpd
+    - name: install httpd-devel
+      become: yes
+      yum:
+        name: httpd-devel
+    - name: change bind address and port
+      become: yes
+      replace:
+        path: /etc/httpd/conf/httpd.conf
+        regexp: Listen 80
+        replace: Listen 0.0.0.0:8244
+        backup: yes
+    - name: start httpd
+      become: yes
+      service:
+        name: httpd
+        state: started
+        enabled: yes
+    - name: stop firewalld
+      become: yes
+      service:
+        name: firewalld
+        state: stopped
+        enabled: no
+
+    #
+    # MariaDB
+    #
+    - name: install mariadb server
+      become: yes
+      yum:
+        name: mariadb-server
+    - name: install mariadb devel
+      become: yes
+      yum:
+        name: mariadb-devel
+    - name: increase max_allowed_packet
+      become: yes
+      blockinfile:
+        path: /etc/my.cnf.d/dkan.cnf
+        create: yes
+        block: |
+          [mysqld]
+          max_allowed_packet=100M
+    - name: start mariadb
+      become: yes
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    #
+    # PHP
+    #
+    - name: install php
+      become: yes
+      yum:
+        name: php
+        enablerepo: remi,remi-php56
+    - name: install php-devel
+      become: yes
+      yum:
+        name: php-devel
+        enablerepo: remi,remi-php56
+    - name: install php-pdo
+      become: yes
+      yum:
+        name: php-pdo
+        enablerepo: remi,remi-php56
+    - name: install php-gd
+      become: yes
+      yum:
+        name: php-gd
+        enablerepo: remi,remi-php56
+    - name: install php-mbstring
+      become: yes
+      yum:
+        name: php-mbstring
+        enablerepo: remi,remi-php56
+    - name: install php-xml
+      become: yes
+      yum:
+        name: php-xml
+        enablerepo: remi,remi-php56
+    - name: install php-mysqlnd
+      become: yes
+      yum:
+        name: php-mysqlnd
+        enablerepo: remi,remi-php56
+    - name: increase php memory size limit
+      become: yes
+      replace:
+        path: /etc/php.ini
+        regexp: memory_limit = 128M
+        replace: memory_limit = 512M
+        backup: yes
+    - name: download lastest composer
+      become: yes
+      shell: curl -sS https://getcomposer.org/installer | php
+      args:
+        chdir: /usr/local/bin
+        creates: /usr/local/bin/composer.phar
+    - name: create symlink composer
+      become: yes
+      file:
+        src: /usr/local/bin/composer.phar
+        dest: /usr/local/bin/composer
+        state: link
+    - name: add path to .config/composer/vendor/bin
+      blockinfile:
+        path: /home/vagrant/.bashrc
+        block: |
+          PATH="$HOME/.config/composer/vendor/bin:$PATH"
+
+    #
+    # Drupal / DKAN
+    #
+    - name: install drush
+      command: composer global require drush/drush:8.*
+      args:
+        creates: /home/vagrant/.config/composer/vendor/bin/drush
+    - name: download dkan
+      become: yes
+      command: git clone --branch master https://github.com/nuams/dkan-drops-7.git dkan
+      args:
+        chdir: /var/www/html
+        creates: /var/www/html/dkan
+    - name: change group
+      become: yes
+      file:
+        path: /var/www/html/dkan
+        owner: apache
+        group: apache
+        recurse: yes
+    - name: create sites/default/settings.php
+      become: yes
+      copy:
+        src: /var/www/html/dkan/sites/default/default.settings.php
+        dest: /var/www/html/dkan/sites/default/settings.php
+        owner: apache
+        group: apache
+    - name: create dkan database
+      mysql_db:
+        name: dkan
+        state: present
+        encoding: utf8
+        collation: utf8_general_ci
+        login_user: root
+    - name: create database user - dkan
+      mysql_user:
+        name: dkan
+        password: dkan
+        state: present
+        priv: 'dkan.*:SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,INDEX,ALTER,CREATE TEMPORARY TABLES'
+        login_user: root
